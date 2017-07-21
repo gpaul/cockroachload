@@ -25,8 +25,6 @@ CREATE TABLE aces (
 	actions STRING NULL,
 	CONSTRAINT "primary" PRIMARY KEY (id ASC),
 	UNIQUE INDEX subject_resource_unique (user_id ASC, group_id ASC, resource_id ASC),
-	INDEX user_id_resource_id (user_id ASC, resource_id ASC),
-	INDEX group_id_resource_id (group_id ASC, resource_id ASC),
 	FAMILY "primary" (id, user_id, group_id, resource_id, actions)
 );
 
@@ -62,8 +60,6 @@ CREATE TABLE user_groups (
 	group_id INTEGER NOT NULL,
 	CONSTRAINT "primary" PRIMARY KEY (user_id ASC, group_id ASC),
 	UNIQUE INDEX user_groups_user_id_group_id_key (user_id ASC, group_id ASC),
-	INDEX user_id_key (user_id ASC),
-	INDEX group_id_key (group_id ASC),
 	FAMILY "primary" (user_id, group_id)
 );
 
