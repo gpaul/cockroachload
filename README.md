@@ -16,4 +16,5 @@ docker run --net=host cockroachdb/cockroach:v1.0.2 start --insecure --http-port=
 docker run --net=host cockroachdb/cockroach:v1.0.2 start --insecure --http-port=0 --port=12343 --join=localhost:12340
 docker run --net=host cockroachdb/cockroach:v1.0.2 start --insecure --http-port=0 --port=12344 --join=localhost:12340
 
-go run load.go -addr=localhost:12340 -verbose
+go get -v github.com/gpaul/cockroachload/load
+./bin/load -addr=localhost:12340 -verbose
