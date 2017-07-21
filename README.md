@@ -10,6 +10,7 @@ In addition to this repository you need
 
 # Running
 
+```
 docker run --net=host cockroachdb/cockroach:v1.0.2 start --insecure --http-port=0 --port=12340
 docker run --net=host cockroachdb/cockroach:v1.0.2 start --insecure --http-port=0 --port=12341 --join=localhost:12340
 docker run --net=host cockroachdb/cockroach:v1.0.2 start --insecure --http-port=0 --port=12342 --join=localhost:12340
@@ -18,3 +19,4 @@ docker run --net=host cockroachdb/cockroach:v1.0.2 start --insecure --http-port=
 
 go get -v github.com/gpaul/cockroachload/load
 ./bin/load -addr=localhost:12340 -verbose
+```
