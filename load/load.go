@@ -401,12 +401,16 @@ func allowUserAccessToResource(db *sql.DB, resource string, uid int) error {
 			}
 			if len(actionstr) > 0 {
 				actionstr += "," + action
+				if _, err := tx.Exec("UPDATE aces SET actions = $1 WHERE user_id=$2 AND group_id=$3 AND resource_id=$4",
+					actionstr, uid, nil, resourceId); err != nil {
+					return err
+				}
 			} else {
 				actionstr = action
-			}
-			if _, err := tx.Exec("INSERT INTO aces (user_id, group_id, resource_id, actions) VALUES ($1, $2, $3, $4)",
-				uid, nil, resourceId, actionstr); err != nil {
-				return err
+				if _, err := tx.Exec("INSERT INTO aces (user_id, group_id, resource_id, actions) VALUES ($1, $2, $3, $4)",
+					uid, nil, resourceId, actionstr); err != nil {
+					return err
+				}
 			}
 			return nil
 		}); err != nil {
@@ -458,12 +462,16 @@ func allowGroupAccessToResource(db *sql.DB, resource string, gid int) error {
 			}
 			if len(actionstr) > 0 {
 				actionstr += "," + action
+				if _, err := tx.Exec("UPDATE aces SET actions = $1 WHERE user_id=$2 AND group_id=$3 AND resource_id=$4",
+					actionstr, nil, gid, resourceId); err != nil {
+					return err
+				}
 			} else {
 				actionstr = action
-			}
-			if _, err := tx.Exec("INSERT INTO aces (group_id, user_id, resource_id, actions) VALUES ($1, $2, $3, $4)",
-				nil, gid, resourceId, actionstr); err != nil {
-				return err
+				if _, err := tx.Exec("INSERT INTO aces (user_id, group_id, resource_id, actions) VALUES ($1, $2, $3, $4)",
+					nil, gid, resourceId, actionstr); err != nil {
+					return err
+				}
 			}
 			return nil
 		}); err != nil {
