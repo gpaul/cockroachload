@@ -24,7 +24,8 @@ CREATE TABLE aces (
 	resource_id INTEGER NULL,
 	actions STRING NULL,
 	CONSTRAINT "primary" PRIMARY KEY (id ASC),
-	UNIQUE INDEX subject_resource_unique (user_id ASC, group_id ASC, resource_id ASC),
+	CONSTRAINT user_resource_unique UNIQUE (user_id, resource_id), 
+    CONSTRAINT group_resource_unique UNIQUE (group_id, resource_id),
 	FAMILY "primary" (id, user_id, group_id, resource_id, actions)
 );
 
@@ -389,11 +390,11 @@ func allowUserAccessToResource(db *sql.DB, resource string, uid int) error {
 				return err
 			}
 			row = tx.QueryRow("SELECT users.id as id from users where users.uid LIKE $1", strconv.Itoa(uid))
-			var user_id int64
-			if err := row.Scan(&user_id); err != nil {
+			var userId int64
+			if err := row.Scan(&userId); err != nil {
 				return err
 			}
-			row = tx.QueryRow("SELECT aces.actions as actions from aces where aces.user_id = $1 and aces.resource_id = $2", user_id, resourceId)
+			row = tx.QueryRow("SELECT aces.actions as actions from aces where aces.user_id = $1 and aces.resource_id = $2", userId, resourceId)
 			var actionstr string
 			err := row.Scan(&actionstr)
 			if err != nil && err != sql.ErrNoRows {
@@ -402,13 +403,14 @@ func allowUserAccessToResource(db *sql.DB, resource string, uid int) error {
 			if len(actionstr) > 0 {
 				actionstr += "," + action
 				if _, err := tx.Exec("UPDATE aces SET actions = $1 WHERE user_id=$2 AND group_id=$3 AND resource_id=$4",
-					actionstr, uid, nil, resourceId); err != nil {
+					actionstr, userId, nil, resourceId); err != nil {
 					return err
 				}
 			} else {
 				actionstr = action
 				if _, err := tx.Exec("INSERT INTO aces (user_id, group_id, resource_id, actions) VALUES ($1, $2, $3, $4)",
-					uid, nil, resourceId, actionstr); err != nil {
+					userId, nil, resourceId, actionstr); err != nil {
+					panic(err)
 					return err
 				}
 			}
@@ -450,11 +452,11 @@ func allowGroupAccessToResource(db *sql.DB, resource string, gid int) error {
 				return err
 			}
 			row = tx.QueryRow("SELECT groups.id as id from groups where groups.gid LIKE $1", strconv.Itoa(gid))
-			var group_id int64
-			if err := row.Scan(&group_id); err != nil {
+			var groupId int64
+			if err := row.Scan(&groupId); err != nil {
 				return err
 			}
-			row = tx.QueryRow("SELECT aces.actions as actions from aces where aces.group_id = $1 and aces.resource_id = $2", group_id, resourceId)
+			row = tx.QueryRow("SELECT aces.actions as actions from aces where aces.group_id = $1 and aces.resource_id = $2", groupId, resourceId)
 			var actionstr string
 			err := row.Scan(&actionstr)
 			if err != nil && err != sql.ErrNoRows {
@@ -463,13 +465,13 @@ func allowGroupAccessToResource(db *sql.DB, resource string, gid int) error {
 			if len(actionstr) > 0 {
 				actionstr += "," + action
 				if _, err := tx.Exec("UPDATE aces SET actions = $1 WHERE user_id=$2 AND group_id=$3 AND resource_id=$4",
-					actionstr, nil, gid, resourceId); err != nil {
+					actionstr, nil, groupId, resourceId); err != nil {
 					return err
 				}
 			} else {
 				actionstr = action
 				if _, err := tx.Exec("INSERT INTO aces (user_id, group_id, resource_id, actions) VALUES ($1, $2, $3, $4)",
-					nil, gid, resourceId, actionstr); err != nil {
+					nil, groupId, resourceId, actionstr); err != nil {
 					return err
 				}
 			}
@@ -492,13 +494,19 @@ func addResource(db *sql.DB, resource string) error {
 
 // removeData removes records singly, to simulate performing such a task through a non-bulk interface
 func removeData(db *sql.DB) error {
-	if err := removeUsers(db); err != nil {
+	if err := logTimingV("Remove users", func() error {
+		return removeUsers(db)
+	}); err != nil {
 		return err
 	}
-	if err := removeGroups(db); err != nil {
+	if err := logTimingV("Remove groups", func() error {
+		return removeGroups(db)
+	}); err != nil {
 		return err
 	}
-	if err := removeResources(db); err != nil {
+	if err := logTimingV("Remove resources", func() error {
+		return removeResources(db)
+	}); err != nil {
 		return err
 	}
 	return nil
@@ -510,7 +518,9 @@ func removeUsers(db *sql.DB) error {
 		return err
 	}
 	for _, uid := range uids {
-		if err := removeUser(db, uid); err != nil {
+		if err := logTimingV(fmt.Sprintf("Remove user %s", uid), func() error {
+			return removeUser(db, uid)
+		}); err != nil {
 			return err
 		}
 	}
@@ -563,7 +573,9 @@ func removeGroups(db *sql.DB) error {
 		return err
 	}
 	for _, gid := range gids {
-		if err := removeGroup(db, gid); err != nil {
+		if err := logTimingV(fmt.Sprintf("Remove group %s", gid), func() error {
+			return removeGroup(db, gid)
+		}); err != nil {
 			return err
 		}
 	}
@@ -616,7 +628,9 @@ func removeResources(db *sql.DB) error {
 		return err
 	}
 	for _, rid := range rids {
-		if err := removeResource(db, rid); err != nil {
+		if err := logTimingV(fmt.Sprintf("Remove resource %s", rid), func() error {
+			return removeResource(db, rid)
+		}); err != nil {
 			return err
 		}
 	}
