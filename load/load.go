@@ -23,10 +23,11 @@ CREATE TABLE aces (
 	group_id INTEGER NULL,
 	resource_id INTEGER NULL,
 	actions STRING NULL,
-	CONSTRAINT "primary" PRIMARY KEY (id ASC),
-	CONSTRAINT user_resource_unique UNIQUE (user_id, resource_id), 
-    CONSTRAINT group_resource_unique UNIQUE (group_id, resource_id),
-	FAMILY "primary" (id, user_id, group_id, resource_id, actions)
+	CONSTRAINT "primary" PRIMARY KEY (id ASC),` +
+	//`CONSTRAINT user_resource_unique UNIQUE (user_id, group_id, resource_id),` +
+	`CONSTRAINT user_resource_unique UNIQUE (user_id, resource_id),
+	CONSTRAINT group_resource_unique UNIQUE (group_id, resource_id),` +
+	`FAMILY "primary" (id, user_id, group_id, resource_id, actions)
 );
 
 CREATE TABLE configs (
@@ -61,6 +62,7 @@ CREATE TABLE user_groups (
 	group_id INTEGER NOT NULL,
 	CONSTRAINT "primary" PRIMARY KEY (user_id ASC, group_id ASC),
 	UNIQUE INDEX user_groups_user_id_group_id_key (user_id ASC, group_id ASC),
+	UNIQUE INDEX user_groups_group_id_user_id_key (group_id ASC, user_id ASC),
 	FAMILY "primary" (user_id, group_id)
 );
 
@@ -86,12 +88,14 @@ func main() {
 		tlsKeyFileF    string
 		tlsCertFileF   string
 		tlsCACertFileF string
+		iterationF     int
 		verboseF       bool
 	)
 	flag.StringVar(&addrF, "addr", "localhost:26257", "the address of the cockroachdb instance to connect to")
 	flag.StringVar(&tlsKeyFileF, "tls-key-file", "", "the path to the root user TLS key to use, if any")
 	flag.StringVar(&tlsCertFileF, "tls-cert-file", "", "the path to the root user TLS certificate to use, if any")
 	flag.StringVar(&tlsCACertFileF, "tls-ca-cert-file", "", "the path to the CA certificate to use, if any")
+	flag.IntVar(&iterationF, "iteration", 0, "run a specific iteration, only")
 	flag.BoolVar(&verboseF, "verbose", false, "print detailed timing data")
 	flag.Parse()
 
@@ -120,8 +124,15 @@ func main() {
 		log.Fatal(err)
 	}
 
+	from := 0
+	to := 1<<63 - 1
+	if iterationF > 0 {
+		from = iterationF
+		to = iterationF
+	}
+
 	if err := logTiming("Loading data", func() error {
-		return run(db)
+		return run(db, from, to)
 	}); err != nil {
 		log.Fatal(err)
 	}
@@ -166,8 +177,8 @@ func createSchema(tx *sql.Tx) error {
 	return err
 }
 
-func run(db *sql.DB) error {
-	for iteration := 0; ; iteration++ {
+func run(db *sql.DB, from, to int) error {
+	for iteration := from; iteration <= to; iteration++ {
 		counts := recordCountForIteration(iteration)
 		msg := fmt.Sprintf("Iteration %d (%s)", iteration, counts)
 		if err := logTiming(msg, func() error {
@@ -238,11 +249,11 @@ func recordCountForIteration(iteration int) (counts recordCount) {
 		return counts
 	}
 	for cidx := range counts {
-		counts[cidx] = baseline
+		counts[cidx] = baseline * 20
 	}
 	for rt := RecordType(0); rt < LastRecordType; rt++ {
 		if iteration&(1<<rt) != 0 {
-			counts[rt]++
+			counts[rt] += 20
 		}
 	}
 	return counts
@@ -394,16 +405,17 @@ func allowUserAccessToResource(db *sql.DB, resource string, uid int) error {
 			if err := row.Scan(&userId); err != nil {
 				return err
 			}
-			row = tx.QueryRow("SELECT aces.actions as actions from aces where aces.user_id = $1 and aces.resource_id = $2", userId, resourceId)
+			row = tx.QueryRow("SELECT aces.actions as actions, aces.id as id from aces where aces.user_id = $1 and aces.resource_id = $2", userId, resourceId)
 			var actionstr string
-			err := row.Scan(&actionstr)
+			var aceId string
+			err := row.Scan(&actionstr, &aceId)
 			if err != nil && err != sql.ErrNoRows {
 				return err
 			}
 			if len(actionstr) > 0 {
 				actionstr += "," + action
-				if _, err := tx.Exec("UPDATE aces SET actions = $1 WHERE user_id=$2 AND group_id=$3 AND resource_id=$4",
-					actionstr, userId, nil, resourceId); err != nil {
+				if _, err := tx.Exec("UPDATE aces SET actions = $1 WHERE aces.id=$2",
+					actionstr, aceId); err != nil {
 					return err
 				}
 			} else {
@@ -456,16 +468,17 @@ func allowGroupAccessToResource(db *sql.DB, resource string, gid int) error {
 			if err := row.Scan(&groupId); err != nil {
 				return err
 			}
-			row = tx.QueryRow("SELECT aces.actions as actions from aces where aces.group_id = $1 and aces.resource_id = $2", groupId, resourceId)
+			row = tx.QueryRow("SELECT aces.actions as actions, aces.id as id from aces where aces.group_id = $1 and aces.resource_id = $2", groupId, resourceId)
 			var actionstr string
-			err := row.Scan(&actionstr)
+			var aceId int64
+			err := row.Scan(&actionstr, &aceId)
 			if err != nil && err != sql.ErrNoRows {
 				return err
 			}
 			if len(actionstr) > 0 {
 				actionstr += "," + action
-				if _, err := tx.Exec("UPDATE aces SET actions = $1 WHERE user_id=$2 AND group_id=$3 AND resource_id=$4",
-					actionstr, nil, groupId, resourceId); err != nil {
+				if _, err := tx.Exec("UPDATE aces SET actions = $1 WHERE ace_id=$2",
+					actionstr, aceId); err != nil {
 					return err
 				}
 			} else {

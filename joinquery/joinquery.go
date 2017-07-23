@@ -41,6 +41,9 @@ func performQueries(db *sql.DB) error {
 		if rows.Err() != nil {
 			return err
 		}
+		if len(userids) == 0 {
+			continue
+		}
 		userid := userids[rand.Intn(len(userids))]
 		rows, err = db.Query("SELECT resources.id AS resources_id, resources.rid AS resources_rid, resources.description AS resources_description, aces.actions AS aces_actions, aces.id AS aces_id, aces.user_id AS aces_user_id, aces.group_id AS aces_group_id, aces.resource_id AS aces_resource_id FROM aces JOIN users ON users.id = aces.user_id JOIN resources ON resources.id = aces.resource_id WHERE users.uid = $1", userid)
 		if err != nil {
