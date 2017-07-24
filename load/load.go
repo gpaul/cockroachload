@@ -23,11 +23,10 @@ CREATE TABLE aces (
 	group_id INTEGER NULL,
 	resource_id INTEGER NULL,
 	actions STRING NULL,
-	CONSTRAINT "primary" PRIMARY KEY (id ASC),` +
-	//`CONSTRAINT user_resource_unique UNIQUE (user_id, group_id, resource_id),` +
-	`CONSTRAINT user_resource_unique UNIQUE (user_id, resource_id),
-	CONSTRAINT group_resource_unique UNIQUE (group_id, resource_id),` +
-	`FAMILY "primary" (id, user_id, group_id, resource_id, actions)
+	CONSTRAINT "primary" PRIMARY KEY (id ASC),
+	CONSTRAINT user_resource_unique UNIQUE (user_id, resource_id),
+	CONSTRAINT group_resource_unique UNIQUE (group_id, resource_id),
+	FAMILY "primary" (id, user_id, group_id, resource_id, actions)
 );
 
 CREATE TABLE configs (
@@ -62,7 +61,6 @@ CREATE TABLE user_groups (
 	group_id INTEGER NOT NULL,
 	CONSTRAINT "primary" PRIMARY KEY (user_id ASC, group_id ASC),
 	UNIQUE INDEX user_groups_user_id_group_id_key (user_id ASC, group_id ASC),
-	UNIQUE INDEX user_groups_group_id_user_id_key (group_id ASC, user_id ASC),
 	FAMILY "primary" (user_id, group_id)
 );
 
@@ -84,18 +82,28 @@ var verbose bool
 
 func main() {
 	var (
-		addrF          string
-		tlsKeyFileF    string
-		tlsCertFileF   string
-		tlsCACertFileF string
-		iterationF     int
-		verboseF       bool
+		addrF             string
+		tlsKeyFileF       string
+		tlsCertFileF      string
+		tlsCACertFileF    string
+		customF           bool
+		usersF            int
+		groupsF           int
+		membersF          int
+		userPermissionsF  int
+		groupPermissionsF int
+		verboseF          bool
 	)
 	flag.StringVar(&addrF, "addr", "localhost:26257", "the address of the cockroachdb instance to connect to")
 	flag.StringVar(&tlsKeyFileF, "tls-key-file", "", "the path to the root user TLS key to use, if any")
 	flag.StringVar(&tlsCertFileF, "tls-cert-file", "", "the path to the root user TLS certificate to use, if any")
 	flag.StringVar(&tlsCACertFileF, "tls-ca-cert-file", "", "the path to the CA certificate to use, if any")
-	flag.IntVar(&iterationF, "iteration", 0, "run a specific iteration, only")
+	flag.BoolVar(&customF, "custom", false, "use custom provided record counts")
+	flag.IntVar(&usersF, "users", 0, "number of users (use with -custom)")
+	flag.IntVar(&groupsF, "groups", 0, "number of groups (use with -custom)")
+	flag.IntVar(&membersF, "members", 0, "number of members per group (use with -custom)")
+	flag.IntVar(&userPermissionsF, "user-permissions", 0, "number of permissions per user (use with -custom)")
+	flag.IntVar(&groupPermissionsF, "group-permissions", 0, "number of permissions per group (use with -custom)")
 	flag.BoolVar(&verboseF, "verbose", false, "print detailed timing data")
 	flag.Parse()
 
@@ -124,15 +132,22 @@ func main() {
 		log.Fatal(err)
 	}
 
-	from := 0
-	to := 1<<63 - 1
-	if iterationF > 0 {
-		from = iterationF
-		to = iterationF
+	if customF {
+		var counts recordCount
+		counts[Users] = usersF
+		counts[Groups] = groupsF
+		counts[Members] = membersF
+		counts[UserPermissions] = userPermissionsF
+		counts[GroupPermissions] = groupPermissionsF
+		if err := logTiming("Loading data", func() error {
+			return runWithCounts(db, counts)
+		}); err != nil {
+			log.Fatal(err)
+		}
+		return
 	}
-
 	if err := logTiming("Loading data", func() error {
-		return run(db, from, to)
+		return run(db)
 	}); err != nil {
 		log.Fatal(err)
 	}
@@ -148,7 +163,7 @@ func logTiming(msg string, fn func() error) error {
 	}
 	t := time.Now()
 	if err := fn(); err != nil {
-		say("%s ... failed: err=%v", msg, err)
+		say("%s ... failed (%s): err=%v", msg, time.Since(t), err)
 		return err
 	}
 	elapsed := time.Now().Sub(t)
@@ -177,28 +192,32 @@ func createSchema(tx *sql.Tx) error {
 	return err
 }
 
-func run(db *sql.DB, from, to int) error {
-	for iteration := from; iteration <= to; iteration++ {
+func run(db *sql.DB) error {
+	for iteration := 0; ; iteration++ {
 		counts := recordCountForIteration(iteration)
 		msg := fmt.Sprintf("Iteration %d (%s)", iteration, counts)
 		if err := logTiming(msg, func() error {
-			if !counts.sane() {
-				say("Skipping non-sensical data mixture: %s", counts)
-				return nil
-			}
-			defer func() {
-				if cerr := logTimingV("Removing data", func() error {
-					return removeData(db)
-				}); cerr != nil {
-					panic(cerr)
-				}
-			}()
-			return prepareData(db, counts)
+			return runWithCounts(db, counts)
 		}); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func runWithCounts(db *sql.DB, counts recordCount) error {
+	if !counts.sane() {
+		say("Skipping non-sensical data mixture: %s", counts)
+		return nil
+	}
+	defer func() {
+		if cerr := logTimingV("Removing data", func() error {
+			return removeData(db)
+		}); cerr != nil {
+			panic(cerr)
+		}
+	}()
+	return prepareData(db, counts)
 }
 
 type RecordType uint
@@ -395,38 +414,50 @@ func userResourceName(rid int) string { return "user-resource-" + strconv.Itoa(r
 func allowUserAccessToResource(db *sql.DB, resource string, uid int) error {
 	for _, action := range []string{"create", "read", "update", "delete"} {
 		if err := crdb.ExecuteTx(db, func(tx *sql.Tx) error {
-			row := tx.QueryRow("SELECT resources.id as id from resources where resources.rid LIKE $1", resource)
-			var resourceId int64
-			if err := row.Scan(&resourceId); err != nil {
-				return err
-			}
-			row = tx.QueryRow("SELECT users.id as id from users where users.uid LIKE $1", strconv.Itoa(uid))
-			var userId int64
-			if err := row.Scan(&userId); err != nil {
-				return err
-			}
-			row = tx.QueryRow("SELECT aces.actions as actions, aces.id as id from aces where aces.user_id = $1 and aces.resource_id = $2", userId, resourceId)
-			var actionstr string
-			var aceId string
-			err := row.Scan(&actionstr, &aceId)
-			if err != nil && err != sql.ErrNoRows {
-				return err
-			}
-			if len(actionstr) > 0 {
-				actionstr += "," + action
-				if _, err := tx.Exec("UPDATE aces SET actions = $1 WHERE aces.id=$2",
-					actionstr, aceId); err != nil {
+			return logTimingV("inside", func() error {
+				var resourceId int64
+				if err := logTimingV("find resource "+resource, func() error {
+					row := tx.QueryRow("SELECT resources.id as id from resources where resources.rid LIKE $1", resource)
+					return row.Scan(&resourceId)
+				}); err != nil {
 					return err
 				}
-			} else {
-				actionstr = action
-				if _, err := tx.Exec("INSERT INTO aces (user_id, group_id, resource_id, actions) VALUES ($1, $2, $3, $4)",
-					userId, nil, resourceId, actionstr); err != nil {
-					panic(err)
+				var userId int64
+				if err := logTimingV("find user "+strconv.Itoa(uid), func() error {
+					row := tx.QueryRow("SELECT users.id as id from users where users.uid LIKE $1", strconv.Itoa(uid))
+					return row.Scan(&userId)
+				}); err != nil {
 					return err
 				}
-			}
-			return nil
+				var actionstr string
+				var aceId string
+				if err := logTimingV("find ace", func() error {
+					row := tx.QueryRow("SELECT aces.actions as actions, aces.id as id from aces where aces.user_id = $1 and aces.resource_id = $2", userId, resourceId)
+					return row.Scan(&actionstr, &aceId)
+				}); err != nil && err != sql.ErrNoRows {
+					return err
+				}
+				if len(actionstr) > 0 {
+					actionstr += "," + action
+					if err := logTimingV("update ace actions="+actionstr, func() error {
+						_, err := tx.Exec("UPDATE aces SET actions = $1 WHERE aces.id=$2",
+							actionstr, aceId)
+						return err
+					}); err != nil {
+						return err
+					}
+				} else {
+					actionstr = action
+					if err := logTimingV("insert ace actions="+actionstr, func() error {
+						_, err := tx.Exec("INSERT INTO aces (user_id, group_id, resource_id, actions) VALUES ($1, $2, $3, $4)",
+							userId, nil, resourceId, actionstr)
+						return err
+					}); err != nil {
+						return err
+					}
+				}
+				return nil
+			})
 		}); err != nil {
 			return err
 		}
@@ -477,7 +508,7 @@ func allowGroupAccessToResource(db *sql.DB, resource string, gid int) error {
 			}
 			if len(actionstr) > 0 {
 				actionstr += "," + action
-				if _, err := tx.Exec("UPDATE aces SET actions = $1 WHERE ace_id=$2",
+				if _, err := tx.Exec("UPDATE aces SET actions = $1 WHERE aces.id=$2",
 					actionstr, aceId); err != nil {
 					return err
 				}
